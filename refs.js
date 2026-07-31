@@ -89,9 +89,15 @@ export function getRefById(id) {
     return getRefs().find(r => r.id === id) ?? null;
 }
 
+// crypto.randomUUID недоступен вне secure context (HTTP по Tailscale-IP),
+// поэтому собираем короткий id сами.
+function makeId() {
+    return Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 6);
+}
+
 export function addRef({ tag, aliases, arc, note, path, priority }) {
     const ref = {
-        id: crypto.randomUUID().slice(0, 8),
+        id: makeId(),
         tag: String(tag ?? '').trim(),
         aliases: normalizeAliases(aliases),
         arc: String(arc ?? '').trim(),
