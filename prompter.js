@@ -18,7 +18,16 @@ function collectContext() {
         ? messages
         : messages.slice(-settings.contextDepth);
 
-    return slice.map(m => `${m.name}: ${m.mes}`).join('\n\n');
+    if (slice.length === 0) return '';
+
+    const last = slice[slice.length - 1];
+    const before = slice.slice(0, -1)
+        .map(m => `${m.name}: ${m.mes}`)
+        .join('\n\n');
+
+    const text = `${before}${before ? '\n\n' : ''}<latest_message>\n${last.name}: ${last.mes}\n</latest_message>`;
+    console.debug('[StoryVision] Контекст промптера (последние 500 символов):', text.slice(-500));
+    return text;
 }
 
 // ---- Инструкция ----
@@ -29,7 +38,7 @@ function buildInstruction(availableTags, arc) {
         : '(библиотека пуста)';
 
     return [
-        'You are a visual scene director. Read the roleplay excerpt below and produce an image generation prompt for the CURRENT moment (the last messages are the present scene).',
+        'You are a visual scene director. Read the roleplay excerpt below and produce an image generation prompt for the CURRENT moment. The scene to depict is the one inside <latest_message> — earlier messages are context for appearances, clothing, and location only.',
         '',
         'Respond with ONLY a JSON object, no markdown fences, no commentary:',
         '{',

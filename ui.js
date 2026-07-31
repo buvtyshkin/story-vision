@@ -8,6 +8,10 @@ import {
 } from './refs.js';
 import { runPrompter, STYLE_PRESETS, getStyleById } from './prompter.js';
 import { fetchImageModels, generateImage } from './imagegen.js';
+import {
+    persistGeneratedImage, attachToLastMessage,
+    getGallery, addToGallery, clearGallery, stripImagesFromChat,
+} from './chatimg.js';
 
 function popupApi() {
     const ctx = getCtx();
@@ -311,7 +315,7 @@ export async function pickCandidate(name, candidates) {
 // Итерация 2: генерация сцены
 // ============================================================
 
-const sessionGallery = []; // [{src, prompt, model, time}]
+// Галерея живёт в chat_metadata (см. chatimg.js) — персистентна и своя у каждой арки.
 
 export async function openGenerateDialog() {
     const { callGenericPopup, POPUP_TYPE } = popupApi();
@@ -449,37 +453,65 @@ async function runGeneration({ modelId, promptBase, styleId, usedRefs }) {
         for (const r of usedRefs) {
             refDataUrls.push(await refToDataUrl(r.ref));
         }
-        const src = await generateImage({ model: modelId, prompt, refDataUrls });
-        sessionGallery.push({ src, prompt, model: modelId, time: Date.now() });
-        await showResultPopup(sessionGallery.length - 1, { modelId, promptBase, styleId, usedRefs });
+        const rawSrc = await generateImage({ model: modelId, prompt, refDataUrls });
+
+        // Сохраняем на сервер (data URL или внешний URL -> локальный путь).
+        const url = await persistGeneratedImage(rawSrc, 'gen');
+        addToGallery({ url, prompt, model: modelId });
+
+        let attached = false;
+        if (getSettings().autoAttach) {
+            try {
+                await attachToLastMessage(url, prompt);
+                attached = true;
+            } catch (error) {
+                toastr.warning('Не удалось прикрепить к сообщению: ' + error.message, 'Story Vision');
+            }
+        }
+
+        await showResultPopup({ url, prompt, model: modelId, attached },
+            { modelId, promptBase, styleId, usedRefs });
     } catch (error) {
         toastr.error(error.message, 'Story Vision');
     }
 }
 
-async function showResultPopup(index, regenParams) {
+async function showResultPopup(entry, regenParams) {
     const { callGenericPopup, POPUP_TYPE } = popupApi();
-    const entry = sessionGallery[index];
 
     const container = document.createElement('div');
     container.classList.add('sv-result');
     container.innerHTML = `
-        <img class="sv-result-img" src="${entry.src}" alt="">
+        <img class="sv-result-img" src="${entry.url}" alt="">
         <div class="sv-result-meta">
-            <small>${esc(entry.model)} · ${new Date(entry.time).toLocaleTimeString()}</small>
+            <small>${esc(entry.model)}${entry.attached
+                ? ' · <i class="fa-solid fa-paperclip"></i> прикреплено к сообщению'
+                : ''}</small>
         </div>
         <div class="sv-result-actions">
             <div class="menu_button" id="sv_res_regen"><i class="fa-solid fa-rotate"></i> Ещё раз</div>
-            <a class="menu_button" id="sv_res_download" href="${entry.src}"
-               download="storyvision_${entry.time}.png"><i class="fa-solid fa-download"></i> Скачать</a>
+            ${entry.attached ? '' : `
+                <div class="menu_button" id="sv_res_attach">
+                    <i class="fa-solid fa-paperclip"></i> Прикрепить</div>`}
+            <a class="menu_button" id="sv_res_download" href="${entry.url}"
+               download="storyvision_${Date.now()}.png"><i class="fa-solid fa-download"></i> Скачать</a>
             <div class="menu_button" id="sv_res_gallery"><i class="fa-solid fa-layer-group"></i>
-                Галерея (${sessionGallery.length})</div>
+                Галерея (${getGallery().length})</div>
         </div>`;
 
     let action = null;
     container.querySelector('#sv_res_regen').addEventListener('click', (e) => {
         action = 'regen';
         e.target.closest('dialog')?.querySelector('.popup-button-ok')?.click();
+    });
+    container.querySelector('#sv_res_attach')?.addEventListener('click', async (e) => {
+        try {
+            await attachToLastMessage(entry.url, entry.prompt);
+            toastr.success('Прикреплено.', 'Story Vision');
+            e.target.closest('.menu_button').style.display = 'none';
+        } catch (error) {
+            toastr.error(error.message, 'Story Vision');
+        }
     });
     container.querySelector('#sv_res_gallery').addEventListener('click', (e) => {
         action = 'gallery';
@@ -496,26 +528,57 @@ async function showResultPopup(index, regenParams) {
     if (action === 'regen' && regenParams) {
         await runGeneration(regenParams);
     } else if (action === 'gallery') {
-        await openSessionGallery();
+        await openChatGallery();
     }
 }
 
-export async function openSessionGallery() {
+export async function openChatGallery() {
     const { callGenericPopup, POPUP_TYPE } = popupApi();
     const container = document.createElement('div');
     container.classList.add('sv-gallery');
 
-    if (sessionGallery.length === 0) {
-        container.innerHTML = '<div class="sv-empty">За эту сессию ещё ничего не сгенерировано.</div>';
-    } else {
-        container.innerHTML = `<div class="sv-gallery-grid">
-            ${sessionGallery.map((e, i) => `
-                <a href="${e.src}" download="storyvision_${e.time}.png" title="${esc(e.model)}">
-                    <img src="${e.src}" alt="">
-                </a>`).join('')}
-        </div>`;
-    }
+    const render = () => {
+        const gallery = getGallery();
+        container.innerHTML = `
+            <div class="sv-section-title">
+                <i class="fa-solid fa-layer-group"></i> Галерея этого чата (${gallery.length})
+            </div>
+            ${gallery.length === 0
+                ? '<div class="sv-empty">В этом чате ещё ничего не сгенерировано.</div>'
+                : `<div class="sv-gallery-grid">
+                    ${gallery.map(e => `
+                        <a href="${e.url}" download="storyvision_${e.time}.png"
+                           title="${esc(e.prompt?.slice(0, 200) ?? '')}">
+                            <img src="${e.url}" alt="">
+                        </a>`).join('')}
+                   </div>`}
+            <div class="sv-result-actions" style="margin-top:10px;">
+                <div class="menu_button" id="sv_gal_strip">
+                    <i class="fa-solid fa-broom"></i> Убрать картинки из сообщений</div>
+                <div class="menu_button" id="sv_gal_clear">
+                    <i class="fa-solid fa-trash"></i> Очистить галерею</div>
+            </div>
+            <small class="sv-hint">«Убрать из сообщений» снимает картинки Story Vision с сообщений чата,
+            галерея при этом остаётся. «Очистить галерею» стирает этот список (файлы на сервере не удаляются).</small>`;
 
+        container.querySelector('#sv_gal_strip').addEventListener('click', async () => {
+            const touched = await stripImagesFromChat();
+            toastr.success(`Очищено сообщений: ${touched}.`, 'Story Vision');
+        });
+        container.querySelector('#sv_gal_clear').addEventListener('click', async () => {
+            const { callGenericPopup, POPUP_TYPE } = popupApi();
+            const confirmed = await callGenericPopup(
+                'Очистить галерею этого чата? Файлы на сервере останутся.',
+                POPUP_TYPE.CONFIRM,
+            );
+            if (confirmed) {
+                clearGallery();
+                render();
+            }
+        });
+    };
+
+    render();
     await callGenericPopup(container, POPUP_TYPE.TEXT, '', {
         okButton: 'Закрыть',
         wide: true,

@@ -1,7 +1,7 @@
 // Story Vision — визуализация сцен Fisher Universe.
 // Итерация 1: библиотека референсов + каст чата + скелет настроек.
 
-import { openLibrary, openGenerateDialog } from './ui.js';
+import { openLibrary, openGenerateDialog, openChatGallery } from './ui.js';
 
 export const MODULE = 'storyVision';
 
@@ -11,6 +11,8 @@ export const defaultSettings = {
     prompterProfile: '',   // id Connection Profile для промптера (итерация 2)
     contextDepth: 8,       // сколько последних сообщений видит промптер
     fullContext: false,    // тумблер «весь контекст»
+    autoAttach: true,      // клеить картинку к последнему сообщению автоматически
+    lastModel: '',         // последняя выбранная модель генерации
 };
 
 export function getCtx() {
@@ -122,11 +124,17 @@ function addSettingsPanel() {
                 <span>Отправлять промптеру весь контекст чата</span>
             </label>
 
+            <label class="checkbox_label" for="sv_auto_attach">
+                <input id="sv_auto_attach" type="checkbox" ${s.autoAttach ? 'checked' : ''}>
+                <span>Автоматически прикреплять картинку к последнему сообщению</span>
+            </label>
+
             <div class="menu_button" id="sv_open_library" style="margin-top:8px;">
                 <i class="fa-solid fa-images"></i> Библиотека референсов
             </div>
-            <small class="sv-hint">Промптер и генерация подключаются в итерации 2 —
-            пока настройки просто сохраняются.</small>
+            <div class="menu_button" id="sv_open_gallery" style="margin-top:4px;">
+                <i class="fa-solid fa-layer-group"></i> Галерея этого чата
+            </div>
         </div>
     </div>`;
     holder.appendChild(wrapper);
@@ -151,7 +159,12 @@ function addSettingsPanel() {
         getSettings().fullContext = e.target.checked;
         saveSettings();
     });
+    wrapper.querySelector('#sv_auto_attach').addEventListener('change', (e) => {
+        getSettings().autoAttach = e.target.checked;
+        saveSettings();
+    });
     wrapper.querySelector('#sv_open_library').addEventListener('click', () => openLibrary());
+    wrapper.querySelector('#sv_open_gallery').addEventListener('click', () => openChatGallery());
 }
 
 function fillProfileSelect(select) {
