@@ -1,7 +1,7 @@
 // Story Vision — визуализация сцен Fisher Universe.
 // Итерация 1: библиотека референсов + каст чата + скелет настроек.
 
-import { openLibrary } from './ui.js';
+import { openLibrary, openGenerateDialog } from './ui.js';
 
 export const MODULE = 'storyVision';
 
@@ -72,11 +72,19 @@ function addWandButton() {
     const menu = document.getElementById('extensionsMenu');
     if (!menu || document.getElementById('storyvision_wand')) return;
 
+    const generateItem = document.createElement('div');
+    generateItem.id = 'storyvision_wand_generate';
+    generateItem.classList.add('list-group-item', 'flex-container', 'flexGap5', 'interactable');
+    generateItem.tabIndex = 0;
+    generateItem.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i><span>SV: Сцена</span>`;
+    generateItem.addEventListener('click', () => openGenerateDialog());
+    menu.appendChild(generateItem);
+
     const item = document.createElement('div');
     item.id = 'storyvision_wand';
     item.classList.add('list-group-item', 'flex-container', 'flexGap5', 'interactable');
     item.tabIndex = 0;
-    item.innerHTML = `<i class="fa-solid fa-images"></i><span>Story Vision</span>`;
+    item.innerHTML = `<i class="fa-solid fa-images"></i><span>SV: Референсы</span>`;
     item.addEventListener('click', () => openLibrary());
     menu.appendChild(item);
 }

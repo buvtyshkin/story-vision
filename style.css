@@ -186,3 +186,107 @@
         grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
     }
 }
+
+/* Генерация */
+
+.sv-generate {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+}
+
+.sv-gen-location {
+    opacity: 0.8;
+}
+
+.sv-generate textarea {
+    width: 100%;
+    resize: vertical;
+    font-size: 0.95em;
+}
+
+.sv-gen-refs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.sv-gen-ref {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
+    cursor: pointer;
+}
+
+.sv-gen-ref img {
+    width: 32px;
+    height: 32px;
+    object-fit: cover;
+    border-radius: 4px;
+}
+
+.sv-gen-missing {
+    width: 100%;
+    opacity: 0.6;
+    font-style: italic;
+    font-size: 0.85em;
+}
+
+.sv-gen-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.sv-gen-row > div {
+    flex: 1;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* Результат */
+
+.sv-result {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+}
+
+.sv-result-img {
+    max-width: 100%;
+    max-height: 70vh;
+    border-radius: 8px;
+}
+
+.sv-result-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.sv-gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+.sv-gallery-grid img {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    border-radius: 6px;
+}
+
+@media (max-width: 600px) {
+    .sv-generate textarea {
+        font-size: 16px;
+    }
+}

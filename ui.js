@@ -1,10 +1,13 @@
 // Story Vision — интерфейс. Всё на нативном Popup Таверны.
 
-import { getCtx, getChatData, saveChatData, esc } from './index.js';
+import { getCtx, getChatData, saveChatData, esc, getSettings, saveSettings } from './index.js';
 import {
     getRefs, getRefById, addRef, updateRef, deleteRef,
     resizeImageFile, uploadImage, setCast, removeFromCast,
+    resolveMany, refToDataUrl,
 } from './refs.js';
+import { runPrompter, STYLE_PRESETS, getStyleById } from './prompter.js';
+import { fetchImageModels, generateImage } from './imagegen.js';
 
 function popupApi() {
     const ctx = getCtx();
@@ -301,5 +304,222 @@ export async function pickCandidate(name, candidates) {
         });
         callGenericPopup(container, POPUP_TYPE.TEXT, '', { okButton: 'Пропустить' })
             .then(() => resolve(chosen));
+    });
+}
+
+// ============================================================
+// Итерация 2: генерация сцены
+// ============================================================
+
+const sessionGallery = []; // [{src, prompt, model, time}]
+
+export async function openGenerateDialog() {
+    const { callGenericPopup, POPUP_TYPE } = popupApi();
+
+    // 1. Промптер.
+    toastr.info('Промптер собирает сцену…', 'Story Vision');
+    let parsed;
+    try {
+        parsed = await runPrompter();
+    } catch (error) {
+        toastr.error(error.message, 'Story Vision');
+        return;
+    }
+
+    // 2. Разрешение персонажей в рефы.
+    const { resolved, ambiguous, missing } = resolveMany(parsed.characters);
+    for (const item of ambiguous) {
+        const chosen = await pickCandidate(item.name, item.candidates);
+        if (chosen) resolved.push({ name: item.name, ref: chosen, source: 'picked' });
+        else missing.push(item.name);
+    }
+
+    // 3. Модели.
+    let models = [];
+    try {
+        models = await fetchImageModels();
+    } catch (error) {
+        toastr.warning(error.message, 'Story Vision');
+    }
+
+    // 4. Попап ревью.
+    const settings = getSettings();
+    const chatData = getChatData();
+    const currentStyle = chatData.defaultStyle ?? 'cinematic';
+    const currentModel = settings.lastModel ?? '';
+
+    const form = document.createElement('div');
+    form.classList.add('sv-generate');
+    form.innerHTML = `
+        <h4><i class="fa-solid fa-clapperboard"></i> Сцена готова к генерации</h4>
+        ${parsed.location ? `<div class="sv-gen-location">Локация: <b>${esc(parsed.location)}</b></div>` : ''}
+
+        <label>Промпт (можно править)</label>
+        <textarea id="sv_gen_prompt" class="text_pole" rows="7">${esc(parsed.prompt)}</textarea>
+
+        <label>Референсы в кадре</label>
+        <div class="sv-gen-refs">
+            ${resolved.length === 0
+                ? '<div class="sv-empty">Рефы не подобрались — генерация пойдёт чисто по тексту.</div>'
+                : resolved.map((r, i) => `
+                    <label class="sv-gen-ref checkbox_label" data-idx="${i}">
+                        <input type="checkbox" checked>
+                        <img src="${esc(r.ref.path)}" alt="">
+                        <span>${esc(r.name)}</span>
+                    </label>`).join('')}
+            ${missing.length ? `<div class="sv-gen-missing">Без рефов: ${missing.map(esc).join(', ')}</div>` : ''}
+        </div>
+
+        <div class="sv-gen-row">
+            <div>
+                <label>Модель</label>
+                <select id="sv_gen_model" class="text_pole">
+                    ${models.length === 0
+                        ? '<option value="">— discovery не удался —</option>'
+                        : models.map(m => `
+                            <option value="${esc(m.id)}" ${m.id === currentModel ? 'selected' : ''}>
+                                ${esc(m.name)}${m.supportsRefs ? ` (refs: ${m.maxRefs})` : ' (без refs)'}
+                            </option>`).join('')}
+                </select>
+            </div>
+            <div>
+                <label>Стиль</label>
+                <select id="sv_gen_style" class="text_pole">
+                    ${STYLE_PRESETS.map(s => `
+                        <option value="${esc(s.id)}" ${s.id === currentStyle ? 'selected' : ''}>
+                            ${esc(s.label)}
+                        </option>`).join('')}
+                </select>
+            </div>
+        </div>`;
+
+    const confirmed = await callGenericPopup(form, POPUP_TYPE.CONFIRM, '', {
+        okButton: 'Генерировать',
+        cancelButton: 'Отмена',
+        wide: true,
+        allowVerticalScrolling: true,
+    });
+    if (!confirmed) return;
+
+    // 5. Сбор параметров.
+    const finalPromptBase = form.querySelector('#sv_gen_prompt').value.trim();
+    const modelId = form.querySelector('#sv_gen_model').value;
+    const styleId = form.querySelector('#sv_gen_style').value;
+    if (!modelId) {
+        toastr.error('Модель не выбрана.', 'Story Vision');
+        return;
+    }
+    settings.lastModel = modelId;
+    saveSettings();
+    chatData.defaultStyle = styleId;
+    saveChatData();
+
+    const modelInfo = models.find(m => m.id === modelId);
+    const maxRefs = modelInfo?.maxRefs ?? 0;
+
+    const checkedRefs = [];
+    form.querySelectorAll('.sv-gen-ref').forEach(labelEl => {
+        if (labelEl.querySelector('input').checked) {
+            checkedRefs.push(resolved[Number(labelEl.dataset.idx)]);
+        }
+    });
+    const usedRefs = checkedRefs.slice(0, maxRefs);
+    if (checkedRefs.length > maxRefs && maxRefs > 0) {
+        toastr.warning(`Модель принимает максимум ${maxRefs} рефов — лишние отброшены.`, 'Story Vision');
+    }
+
+    await runGeneration({ modelId, promptBase: finalPromptBase, styleId, usedRefs });
+}
+
+async function runGeneration({ modelId, promptBase, styleId, usedRefs }) {
+    // Финальный промпт: сцена + маппинг рефов + стиль.
+    let prompt = promptBase;
+    if (usedRefs.length) {
+        const mapping = usedRefs
+            .map((r, i) => `Reference image ${i + 1} shows ${r.name} — match this character's face and appearance exactly.`)
+            .join(' ');
+        prompt += `\n\n${mapping}`;
+    }
+    const style = getStyleById(styleId);
+    if (style.suffix) prompt += `\n\nStyle: ${style.suffix}`;
+
+    toastr.info('Генерация пошла…', 'Story Vision');
+    try {
+        const refDataUrls = [];
+        for (const r of usedRefs) {
+            refDataUrls.push(await refToDataUrl(r.ref));
+        }
+        const src = await generateImage({ model: modelId, prompt, refDataUrls });
+        sessionGallery.push({ src, prompt, model: modelId, time: Date.now() });
+        await showResultPopup(sessionGallery.length - 1, { modelId, promptBase, styleId, usedRefs });
+    } catch (error) {
+        toastr.error(error.message, 'Story Vision');
+    }
+}
+
+async function showResultPopup(index, regenParams) {
+    const { callGenericPopup, POPUP_TYPE } = popupApi();
+    const entry = sessionGallery[index];
+
+    const container = document.createElement('div');
+    container.classList.add('sv-result');
+    container.innerHTML = `
+        <img class="sv-result-img" src="${entry.src}" alt="">
+        <div class="sv-result-meta">
+            <small>${esc(entry.model)} · ${new Date(entry.time).toLocaleTimeString()}</small>
+        </div>
+        <div class="sv-result-actions">
+            <div class="menu_button" id="sv_res_regen"><i class="fa-solid fa-rotate"></i> Ещё раз</div>
+            <a class="menu_button" id="sv_res_download" href="${entry.src}"
+               download="storyvision_${entry.time}.png"><i class="fa-solid fa-download"></i> Скачать</a>
+            <div class="menu_button" id="sv_res_gallery"><i class="fa-solid fa-layer-group"></i>
+                Галерея (${sessionGallery.length})</div>
+        </div>`;
+
+    let action = null;
+    container.querySelector('#sv_res_regen').addEventListener('click', (e) => {
+        action = 'regen';
+        e.target.closest('dialog')?.querySelector('.popup-button-ok')?.click();
+    });
+    container.querySelector('#sv_res_gallery').addEventListener('click', (e) => {
+        action = 'gallery';
+        e.target.closest('dialog')?.querySelector('.popup-button-ok')?.click();
+    });
+
+    await callGenericPopup(container, POPUP_TYPE.TEXT, '', {
+        okButton: 'Закрыть',
+        wide: true,
+        large: true,
+        allowVerticalScrolling: true,
+    });
+
+    if (action === 'regen' && regenParams) {
+        await runGeneration(regenParams);
+    } else if (action === 'gallery') {
+        await openSessionGallery();
+    }
+}
+
+export async function openSessionGallery() {
+    const { callGenericPopup, POPUP_TYPE } = popupApi();
+    const container = document.createElement('div');
+    container.classList.add('sv-gallery');
+
+    if (sessionGallery.length === 0) {
+        container.innerHTML = '<div class="sv-empty">За эту сессию ещё ничего не сгенерировано.</div>';
+    } else {
+        container.innerHTML = `<div class="sv-gallery-grid">
+            ${sessionGallery.map((e, i) => `
+                <a href="${e.src}" download="storyvision_${e.time}.png" title="${esc(e.model)}">
+                    <img src="${e.src}" alt="">
+                </a>`).join('')}
+        </div>`;
+    }
+
+    await callGenericPopup(container, POPUP_TYPE.TEXT, '', {
+        okButton: 'Закрыть',
+        wide: true,
+        large: true,
+        allowVerticalScrolling: true,
     });
 }
