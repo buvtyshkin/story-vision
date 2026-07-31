@@ -96,6 +96,11 @@ export async function attachToMessage(messageId, url, prompt) {
     return targetId;
 }
 
+// Обёртка: прикрепить к последнему сообщению чата (её импортирует ui.js).
+export async function attachToLastMessage(url, prompt) {
+    return await attachToMessage(findLastMessageId(), url, prompt);
+}
+
 // ---- Галерея чата (chat_metadata, наследуется ветками) ----
 
 export function getGallery() {
