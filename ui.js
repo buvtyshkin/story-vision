@@ -9,7 +9,7 @@ import {
 import { runPrompter, STYLE_PRESETS, getStyleById } from './prompter.js';
 import { fetchImageModels, generateImage } from './imagegen.js';
 import {
-    persistGeneratedImage, attachToLastMessage,
+    persistGeneratedImage, attachToMessage, findLastMessageId,
     getGallery, addToGallery, clearGallery, stripImagesFromChat,
 } from './chatimg.js';
 
@@ -324,21 +324,35 @@ export async function pickCandidate(name, candidates) {
 // Галерея живёт в chat_metadata (см. chatimg.js) — персистентна и своя у каждой арки.
 
 export async function openGenerateDialog() {
+    try {
+        await generateFlow();
+    } catch (error) {
+        console.error('[StoryVision] Сбой пайплайна:', error);
+        toastr.error(String(error?.message ?? error), 'Story Vision');
+    }
+}
+
+async function generateFlow() {
     const { callGenericPopup, POPUP_TYPE } = popupApi();
+    console.debug('[StoryVision] Сцена: старт');
 
     // Фиксируем целевое сообщение СЕЙЧАС — сцена принадлежит этому моменту,
     // даже если за время генерации в чате появятся новые сообщения.
     const targetMesId = findLastMessageId();
 
     // 1. Промптер.
-    toastr.info('Промптер собирает сцену…', 'Story Vision');
+    const busyToast = toastr.info('Промптер собирает сцену… (DeepSeek может думать до минуты)',
+        'Story Vision', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: true });
     let parsed;
     try {
         parsed = await runPrompter();
     } catch (error) {
         toastr.error(error.message, 'Story Vision');
         return;
+    } finally {
+        toastr.clear(busyToast);
     }
+    console.debug('[StoryVision] Промптер вернул:', parsed);
 
     // 2. Разрешение персонажей в рефы.
     const { resolved, ambiguous, missing } = resolveMany(parsed.characters);
@@ -442,10 +456,10 @@ export async function openGenerateDialog() {
         toastr.warning(`Модель принимает максимум ${maxRefs} рефов — лишние отброшены.`, 'Story Vision');
     }
 
-    await runGeneration({ modelId, promptBase: finalPromptBase, styleId, usedRefs });
+    await runGeneration({ modelId, promptBase: finalPromptBase, styleId, usedRefs, targetMesId });
 }
 
-async function runGeneration({ modelId, promptBase, styleId, usedRefs }) {
+async function runGeneration({ modelId, promptBase, styleId, usedRefs, targetMesId }) {
     // Финальный промпт: сцена + маппинг рефов + стиль.
     let prompt = promptBase;
     if (usedRefs.length) {
@@ -459,7 +473,8 @@ async function runGeneration({ modelId, promptBase, styleId, usedRefs }) {
     const style = getStyleById(styleId);
     if (style.suffix) prompt += `\n\nStyle: ${style.suffix}`;
 
-    toastr.info('Генерация пошла…', 'Story Vision');
+    const busyToast = toastr.info('Генерация пошла…', 'Story Vision',
+        { timeOut: 0, extendedTimeOut: 0, tapToDismiss: true });
     try {
         const refDataUrls = [];
         for (const r of usedRefs) {
@@ -474,17 +489,20 @@ async function runGeneration({ modelId, promptBase, styleId, usedRefs }) {
         let attached = false;
         if (getSettings().autoAttach) {
             try {
-                await attachToLastMessage(url, prompt);
+                await attachToMessage(targetMesId, url, prompt);
                 attached = true;
             } catch (error) {
                 toastr.warning('Не удалось прикрепить к сообщению: ' + error.message, 'Story Vision');
             }
         }
 
-        await showResultPopup({ url, prompt, model: modelId, attached },
-            { modelId, promptBase, styleId, usedRefs });
+        await showResultPopup({ url, prompt, model: modelId, attached, targetMesId },
+            { modelId, promptBase, styleId, usedRefs, targetMesId });
     } catch (error) {
-        toastr.error(error.message, 'Story Vision');
+        console.error('[StoryVision] Сбой генерации:', error);
+        toastr.error(String(error?.message ?? error), 'Story Vision');
+    } finally {
+        toastr.clear(busyToast);
     }
 }
 
@@ -518,7 +536,7 @@ async function showResultPopup(entry, regenParams) {
     });
     container.querySelector('#sv_res_attach')?.addEventListener('click', async (e) => {
         try {
-            await attachToLastMessage(entry.url, entry.prompt);
+            await attachToMessage(entry.targetMesId, entry.url, entry.prompt);
             toastr.success('Прикреплено.', 'Story Vision');
             e.target.closest('.menu_button').style.display = 'none';
         } catch (error) {
