@@ -1,0 +1,188 @@
+/* Story Vision — стили контента. Позиционированием занимается нативный Popup. */
+
+.sv-library {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    text-align: left;
+}
+
+.sv-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.sv-section-title .menu_button {
+    margin-left: auto;
+}
+
+.sv-arc-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.sv-arc-row input {
+    max-width: 200px;
+}
+
+.sv-empty {
+    opacity: 0.6;
+    font-style: italic;
+    padding: 8px 0;
+}
+
+/* Каст */
+
+.sv-cast-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.sv-cast-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
+}
+
+.sv-cast-item img {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 4px;
+}
+
+.sv-cast-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.sv-cast-info small {
+    opacity: 0.7;
+}
+
+.sv-cast-remove {
+    margin-left: auto;
+}
+
+/* Библиотека */
+
+.sv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+}
+
+.sv-card {
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
+}
+
+.sv-card img {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    display: block;
+}
+
+.sv-card-body {
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 40px;
+}
+
+.sv-card-body small {
+    opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sv-badge {
+    align-self: flex-start;
+    font-size: 0.7em;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #888) 30%, transparent);
+}
+
+.sv-card-actions {
+    display: flex;
+    justify-content: space-around;
+    padding: 4px;
+    gap: 4px;
+}
+
+.sv-card-actions .menu_button {
+    flex: 1;
+    justify-content: center;
+    min-height: 32px; /* тач-таргет для мобилки */
+}
+
+.sv-pick {
+    cursor: pointer;
+}
+
+.sv-pick:hover {
+    outline: 2px solid var(--SmartThemeQuoteColor, #888);
+}
+
+/* Форма рефа */
+
+.sv-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    text-align: left;
+}
+
+.sv-form label {
+    margin-top: 4px;
+    font-size: 0.9em;
+    opacity: 0.85;
+}
+
+.sv-form-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.sv-form-preview img {
+    max-width: 180px;
+    max-height: 180px;
+    object-fit: cover;
+    border-radius: 8px;
+}
+
+.sv-hint {
+    display: block;
+    opacity: 0.6;
+    margin-top: 6px;
+}
+
+/* Мобильные твики: шрифты 16px против авто-зума iOS */
+@media (max-width: 600px) {
+    .sv-form input,
+    .sv-arc-row input {
+        font-size: 16px;
+    }
+    .sv-grid {
+        grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    }
+}
