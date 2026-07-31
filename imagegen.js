@@ -81,6 +81,13 @@ export async function generateImage({ model, prompt, refDataUrls = [] }) {
         body.input_references = refDataUrls;
     }
 
+    console.debug('[StoryVision] Генерация:', {
+        model: model,
+        refs: refDataUrls.length,
+        refsKb: Math.round(refDataUrls.reduce((sum, r) => sum + r.length, 0) * 0.75 / 1024),
+        promptChars: prompt.length,
+    });
+
     let response;
     try {
         response = await fetch(`${API_BASE}/images`, {

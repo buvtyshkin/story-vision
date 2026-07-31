@@ -12,6 +12,7 @@ export const defaultSettings = {
     contextDepth: 8,       // сколько последних сообщений видит промптер
     fullContext: false,    // тумблер «весь контекст»
     autoAttach: true,      // клеить картинку к последнему сообщению автоматически
+    blockChatImages: true, // вырезать image-части из запросов к основной модели
     lastModel: '',         // последняя выбранная модель генерации
 };
 
@@ -129,6 +130,11 @@ function addSettingsPanel() {
                 <span>Автоматически прикреплять картинку к последнему сообщению</span>
             </label>
 
+            <label class="checkbox_label" for="sv_block_images">
+                <input id="sv_block_images" type="checkbox" ${s.blockChatImages ? 'checked' : ''}>
+                <span>Не отправлять картинки чата основной модели (страховка контекста)</span>
+            </label>
+
             <div class="menu_button" id="sv_open_library" style="margin-top:8px;">
                 <i class="fa-solid fa-images"></i> Библиотека референсов
             </div>
@@ -163,6 +169,10 @@ function addSettingsPanel() {
         getSettings().autoAttach = e.target.checked;
         saveSettings();
     });
+    wrapper.querySelector('#sv_block_images').addEventListener('change', (e) => {
+        getSettings().blockChatImages = e.target.checked;
+        saveSettings();
+    });
     wrapper.querySelector('#sv_open_library').addEventListener('click', () => openLibrary());
     wrapper.querySelector('#sv_open_gallery').addEventListener('click', () => openChatGallery());
 }
@@ -192,10 +202,28 @@ jQuery(async () => {
 
     const ctx = getCtx();
     const eventTypes = ctx.eventTypes ?? ctx.event_types;
-    // При смене чата ничего пересоздавать не нужно: каст читается лениво
-    // из chatMetadata в момент открытия попапа. Хук оставлен на будущее.
-    if (ctx.eventSource && eventTypes?.CHAT_CHANGED) {
-        ctx.eventSource.on(eventTypes.CHAT_CHANGED, () => {});
+
+    // Страховка контекста: при media_inlining картинки из сообщений уезжают
+    // в основную модель (inline_image это НЕ контролирует — флаг чисто про UI).
+    // Вырезаем image-части из готового промпта перед отправкой.
+    if (ctx.eventSource && eventTypes?.CHAT_COMPLETION_PROMPT_READY) {
+        ctx.eventSource.on(eventTypes.CHAT_COMPLETION_PROMPT_READY, (eventData) => {
+            if (!getSettings().blockChatImages) return;
+            if (!Array.isArray(eventData?.chat)) return;
+            let stripped = 0;
+            for (const msg of eventData.chat) {
+                if (!Array.isArray(msg?.content)) continue;
+                const kept = msg.content.filter(part =>
+                    part?.type !== 'image_url' && part?.type !== 'video_url' && part?.type !== 'input_audio');
+                if (kept.length !== msg.content.length) {
+                    stripped += msg.content.length - kept.length;
+                    msg.content = kept.length ? kept : [{ type: 'text', text: '' }];
+                }
+            }
+            if (stripped > 0) {
+                console.debug(`[StoryVision] Вырезано media-частей из промпта: ${stripped}`);
+            }
+        });
     }
 
     console.log('[StoryVision] loaded');

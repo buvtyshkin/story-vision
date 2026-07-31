@@ -47,19 +47,29 @@ export async function persistGeneratedImage(src, baseName) {
     }
 }
 
-// ---- Прикрепление к последнему сообщению ----
+// ---- Прикрепление к конкретному сообщению ----
 
-export async function attachToLastMessage(url, prompt) {
+export function findLastMessageId() {
+    const chat = getCtx().chat ?? [];
+    for (let i = chat.length - 1; i >= 0; i--) {
+        if (!chat[i].is_system) return i;
+    }
+    return -1;
+}
+
+export async function attachToMessage(messageId, url, prompt) {
     const ctx = getCtx();
     const chat = ctx.chat ?? [];
 
-    let messageId = -1;
-    for (let i = chat.length - 1; i >= 0; i--) {
-        if (!chat[i].is_system) { messageId = i; break; }
+    // Целевое сообщение могло исчезнуть (удаление/ветка) — тогда падаем на последнее.
+    let targetId = messageId;
+    if (targetId === undefined || targetId === null || targetId < 0
+        || targetId >= chat.length || chat[targetId]?.is_system) {
+        targetId = findLastMessageId();
     }
-    if (messageId === -1) throw new Error('В чате нет сообщения для прикрепления.');
+    if (targetId === -1) throw new Error('В чате нет сообщения для прикрепления.');
 
-    const message = chat[messageId];
+    const message = chat[targetId];
     if (!message.extra || typeof message.extra !== 'object') message.extra = {};
     if (!Array.isArray(message.extra.media)) message.extra.media = [];
     if (!message.extra.media.length && !message.extra.media_display) {
@@ -74,14 +84,16 @@ export async function attachToLastMessage(url, prompt) {
         sv: true, // маркер Story Vision — по нему работает уборка
     });
     message.extra.media_index = message.extra.media.length - 1;
-    message.extra.inline_image = false;
+    // true = показывать текст сообщения вместе с картинкой.
+    // false — режим «сообщение-картинка» (/imagine), он прячет текст.
+    message.extra.inline_image = true;
 
     const appendMedia = await getAppendMedia();
-    const element = jQuery(`#chat .mes[mesid="${messageId}"]`);
+    const element = jQuery(`#chat .mes[mesid="${targetId}"]`);
     if (element.length) appendMedia(message, element);
 
     await ctx.saveChat();
-    return messageId;
+    return targetId;
 }
 
 // ---- Галерея чата (chat_metadata, наследуется ветками) ----
