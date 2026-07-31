@@ -42,11 +42,15 @@ export async function uploadImage(dataUrl, baseName) {
         .slice(0, 40);
     const filename = `${safeName}_${Date.now()}`;
 
+    // Эндпоинт ждёт чистый base64 (без префикса data:) и обязательный format.
+    const base64 = dataUrl.replace(/^data:image\/[a-z+]+;base64,/, '');
+
     const response = await fetch('/api/images/upload', {
         method: 'POST',
         headers: ctx.getRequestHeaders(),
         body: JSON.stringify({
-            image: dataUrl,
+            image: base64,
+            format: 'jpg',
             ch_name: 'StoryVision',
             filename: filename,
         }),
