@@ -95,13 +95,14 @@ function makeId() {
     return Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 6);
 }
 
-export function addRef({ tag, aliases, arc, note, path, priority }) {
+export function addRef({ tag, aliases, arc, note, path, priority, resemblance }) {
     const ref = {
         id: makeId(),
         tag: String(tag ?? '').trim(),
         aliases: normalizeAliases(aliases),
         arc: String(arc ?? '').trim(),
         note: String(note ?? '').trim(),
+        resemblance: String(resemblance ?? '').trim(),
         path: path,
         priority: Number(priority) || 1,
     };
@@ -117,6 +118,7 @@ export function updateRef(id, patch) {
     if (patch.aliases !== undefined) ref.aliases = normalizeAliases(patch.aliases);
     if (patch.arc !== undefined) ref.arc = String(patch.arc).trim();
     if (patch.note !== undefined) ref.note = String(patch.note).trim();
+    if (patch.resemblance !== undefined) ref.resemblance = String(patch.resemblance).trim();
     if (patch.priority !== undefined) ref.priority = Number(patch.priority) || 1;
     if (patch.path !== undefined) ref.path = patch.path;
     saveSettings();

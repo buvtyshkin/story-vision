@@ -13,6 +13,7 @@ export const defaultSettings = {
     fullContext: false,    // тумблер «весь контекст»
     autoAttach: true,      // клеить картинку к последнему сообщению автоматически
     blockChatImages: true, // вырезать image-части из запросов к основной модели
+    customStyle: '',       // суффикс для стиля «Свой стиль»
     lastModel: '',         // последняя выбранная модель генерации
 };
 
@@ -135,6 +136,11 @@ function addSettingsPanel() {
                 <span>Не отправлять картинки чата основной модели (страховка контекста)</span>
             </label>
 
+            <label for="sv_custom_style">Свой стиль (суффикс промпта для пресета «Свой стиль»)</label>
+            <input id="sv_custom_style" class="text_pole" type="text"
+                   placeholder="ligne claire, flat colors, Moebius-inspired..."
+                   value="${esc(s.customStyle)}">
+
             <div class="menu_button" id="sv_open_library" style="margin-top:8px;">
                 <i class="fa-solid fa-images"></i> Библиотека референсов
             </div>
@@ -171,6 +177,10 @@ function addSettingsPanel() {
     });
     wrapper.querySelector('#sv_block_images').addEventListener('change', (e) => {
         getSettings().blockChatImages = e.target.checked;
+        saveSettings();
+    });
+    wrapper.querySelector('#sv_custom_style').addEventListener('input', (e) => {
+        getSettings().customStyle = e.target.value;
         saveSettings();
     });
     wrapper.querySelector('#sv_open_library').addEventListener('click', () => openLibrary());

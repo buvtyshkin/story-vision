@@ -185,6 +185,11 @@ async function editRefDialog(existing) {
         <input id="sv_form_arc" class="text_pole" type="text"
                placeholder="LA-2007" value="${esc(existing?.arc ?? '')}">
 
+        <label>Сходство (для промпта: «closely resembling …»)</label>
+        <input id="sv_form_resemblance" class="text_pole" type="text"
+               placeholder="actress Angelina Jolie circa 2000"
+               value="${esc(existing?.resemblance ?? '')}">
+
         <label>Заметка</label>
         <input id="sv_form_note" class="text_pole" type="text"
                placeholder="гала, вечернее платье" value="${esc(existing?.note ?? '')}">
@@ -241,6 +246,7 @@ async function editRefDialog(existing) {
             aliases: form.querySelector('#sv_form_aliases').value,
             arc: form.querySelector('#sv_form_arc').value,
             note: form.querySelector('#sv_form_note').value,
+            resemblance: form.querySelector('#sv_form_resemblance').value,
             priority: form.querySelector('#sv_form_priority').value,
             path,
         };
@@ -319,6 +325,10 @@ export async function pickCandidate(name, candidates) {
 
 export async function openGenerateDialog() {
     const { callGenericPopup, POPUP_TYPE } = popupApi();
+
+    // Фиксируем целевое сообщение СЕЙЧАС — сцена принадлежит этому моменту,
+    // даже если за время генерации в чате появятся новые сообщения.
+    const targetMesId = findLastMessageId();
 
     // 1. Промптер.
     toastr.info('Промптер собирает сцену…', 'Story Vision');
@@ -440,7 +450,9 @@ async function runGeneration({ modelId, promptBase, styleId, usedRefs }) {
     let prompt = promptBase;
     if (usedRefs.length) {
         const mapping = usedRefs
-            .map((r, i) => `Reference image ${i + 1} shows ${r.name} — match this character's face and appearance exactly.`)
+            .map((r, i) => r.ref.resemblance
+                ? `Reference image ${i + 1} shows the person closely resembling ${r.ref.resemblance} (${r.name} in the scene) — match this face and appearance exactly.`
+                : `Reference image ${i + 1} shows ${r.name} — match this character's face and appearance exactly.`)
             .join(' ');
         prompt += `\n\n${mapping}`;
     }
