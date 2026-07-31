@@ -37,9 +37,60 @@ export async function fetchImageModels(force = false) {
             supportsRefs: modelSupportsRefs(m),
             maxRefs: getMaxRefs(m),
             supportedParams: Object.keys(m.supported_parameters ?? {}),
+            nsfw: m?.capabilities?.nsfw === true,
+            endpointsPath: m.endpoints ?? null,
         }));
 
     return modelsCache;
+}
+
+// ---- Подсказки по моделям: качество / цензура / цена ----
+// Курируемая карта по семействам; цензура уточняется живым флагом capabilities.nsfw,
+// цена — живым запросом к endpoints (лениво, с кэшем).
+
+const MODEL_HINTS = [
+    { match: /nano-banana-pro|gemini-3-pro-image/i, quality: 'топ', censorship: 'строгая (реальные лица, NSFW)', cost: 'дорого' },
+    { match: /nano-banana|gemini.*flash-image|gemini.*image/i, quality: 'высокое', censorship: 'строгая (реальные лица, NSFW)', cost: 'средне' },
+    { match: /gpt-image/i, quality: 'высокое', censorship: 'строгая', cost: 'средне (зависит от quality)' },
+    { match: /flux.*kontext/i, quality: 'высокое, лучший с рефами', censorship: 'умеренная', cost: 'средне' },
+    { match: /flux.*(pro|max)/i, quality: 'высокое', censorship: 'умеренная', cost: 'средне-дорого' },
+    { match: /flux.*(schnell|klein|dev)/i, quality: 'хорошее', censorship: 'умеренная', cost: 'дёшево' },
+    { match: /seedream/i, quality: 'высокое', censorship: 'умеренная', cost: 'дёшево-средне' },
+    { match: /qwen.*image/i, quality: 'хорошее', censorship: 'мягкая', cost: 'дёшево' },
+    { match: /hidream/i, quality: 'хорошее', censorship: 'мягкая', cost: 'дёшево' },
+    { match: /chroma/i, quality: 'художественное', censorship: 'нет', cost: 'дёшево' },
+    { match: /pony|illustrious|noob|animagine|sdxl|autismmix/i, quality: 'аниме-профиль', censorship: 'нет', cost: 'копейки' },
+    { match: /z-image|zimage/i, quality: 'среднее', censorship: 'умеренная', cost: 'копейки' },
+    { match: /hunyuan/i, quality: 'хорошее', censorship: 'умеренная', cost: 'дёшево' },
+    { match: /imagen/i, quality: 'топ-фотореализм', censorship: 'строгая', cost: 'дорого' },
+];
+
+export function getModelHints(model) {
+    const hint = MODEL_HINTS.find(h => h.match.test(model.id) || h.match.test(model.name)) ?? {};
+    return {
+        quality: hint.quality ?? '—',
+        censorship: model.nsfw ? 'нет (NSFW ок)' : (hint.censorship ?? 'неизвестно'),
+        cost: hint.cost ?? '—',
+    };
+}
+
+const pricingCache = {};
+
+export async function fetchModelPricing(modelId) {
+    if (pricingCache[modelId] !== undefined) return pricingCache[modelId];
+    const model = getModelInfo(modelId);
+    const path = model?.endpointsPath ?? `/api/v1/images/models/${encodeURIComponent(modelId)}/endpoints`;
+    try {
+        const response = await fetch(path.startsWith('http') ? path : `https://nano-gpt.com${path}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const pricing = payload?.endpoints?.[0]?.pricing;
+        const entry = pricing?.find(p => p.billable === 'output_image') ?? pricing?.[0];
+        pricingCache[modelId] = entry?.cost_usd ?? null;
+    } catch {
+        pricingCache[modelId] = null;
+    }
+    return pricingCache[modelId];
 }
 
 function modelSupportsRefs(model) {

@@ -7,7 +7,7 @@ import {
     resolveMany, refToDataUrl,
 } from './refs.js';
 import { runPrompter, STYLE_PRESETS, getStyleById } from './prompter.js';
-import { fetchImageModels, generateImage } from './imagegen.js';
+import { fetchImageModels, generateImage, getModelHints, fetchModelPricing } from './imagegen.js';
 import {
     persistGeneratedImage, attachToMessage, findLastMessageId,
     getGallery, addToGallery, clearGallery, stripImagesFromChat,
@@ -370,20 +370,32 @@ async function generateFlow() {
         toastr.warning(error.message, 'Story Vision');
     }
 
-    // 4. Попап ревью.
+    // 4. Ревью и генерация.
+    await reviewAndGenerate({
+        promptBase: parsed.prompt,
+        location: parsed.location,
+        resolved, missing, models, targetMesId,
+        styleId: getChatData().defaultStyle ?? 'cinematic',
+        modelId: getSettings().lastModel ?? '',
+    });
+}
+
+// Попап ревью. Вызывается из generateFlow и из кнопки «Заново» —
+// state несёт всё нужное для полного пересбора параметров.
+async function reviewAndGenerate(state) {
+    const { callGenericPopup, POPUP_TYPE } = popupApi();
+    const { resolved, missing, models, targetMesId } = state;
     const settings = getSettings();
     const chatData = getChatData();
-    const currentStyle = chatData.defaultStyle ?? 'cinematic';
-    const currentModel = settings.lastModel ?? '';
 
     const form = document.createElement('div');
     form.classList.add('sv-generate');
     form.innerHTML = `
         <h4><i class="fa-solid fa-clapperboard"></i> Сцена готова к генерации</h4>
-        ${parsed.location ? `<div class="sv-gen-location">Локация: <b>${esc(parsed.location)}</b></div>` : ''}
+        ${state.location ? `<div class="sv-gen-location">Локация: <b>${esc(state.location)}</b></div>` : ''}
 
         <label>Промпт (можно править)</label>
-        <textarea id="sv_gen_prompt" class="text_pole" rows="7">${esc(parsed.prompt)}</textarea>
+        <textarea id="sv_gen_prompt" class="text_pole" rows="7">${esc(state.promptBase)}</textarea>
 
         <label>Референсы в кадре</label>
         <div class="sv-gen-refs">
@@ -405,21 +417,40 @@ async function generateFlow() {
                     ${models.length === 0
                         ? '<option value="">— discovery не удался —</option>'
                         : models.map(m => `
-                            <option value="${esc(m.id)}" ${m.id === currentModel ? 'selected' : ''}>
+                            <option value="${esc(m.id)}" ${m.id === state.modelId ? 'selected' : ''}>
                                 ${esc(m.name)}${m.supportsRefs ? ` (refs: ${m.maxRefs})` : ' (без refs)'}
                             </option>`).join('')}
                 </select>
+                <small id="sv_model_info" class="sv-model-info"></small>
             </div>
             <div>
                 <label>Стиль</label>
                 <select id="sv_gen_style" class="text_pole">
                     ${STYLE_PRESETS.map(s => `
-                        <option value="${esc(s.id)}" ${s.id === currentStyle ? 'selected' : ''}>
+                        <option value="${esc(s.id)}" ${s.id === state.styleId ? 'selected' : ''}>
                             ${esc(s.label)}
                         </option>`).join('')}
                 </select>
             </div>
         </div>`;
+
+    // Инфо-строка модели: качество / цензура / цена (живая цена подгружается лениво).
+    const infoEl = form.querySelector('#sv_model_info');
+    const modelSelect = form.querySelector('#sv_gen_model');
+    const updateModelInfo = async () => {
+        const model = models.find(m => m.id === modelSelect.value);
+        if (!model) { infoEl.textContent = ''; return; }
+        const hints = getModelHints(model);
+        infoEl.textContent = `Качество: ${hints.quality} · Цензура: ${hints.censorship} · Цена: ${hints.cost}`;
+        const requestedId = model.id;
+        const price = await fetchModelPricing(requestedId);
+        // Пока грузили цену, пользователь мог переключить модель.
+        if (modelSelect.value === requestedId && price !== null) {
+            infoEl.textContent = `Качество: ${hints.quality} · Цензура: ${hints.censorship} · Цена: ~$${price.toFixed(3)}/изобр.`;
+        }
+    };
+    modelSelect.addEventListener('change', updateModelInfo);
+    updateModelInfo();
 
     const confirmed = await callGenericPopup(form, POPUP_TYPE.CONFIRM, '', {
         okButton: 'Генерировать',
@@ -429,9 +460,9 @@ async function generateFlow() {
     });
     if (!confirmed) return;
 
-    // 5. Сбор параметров.
-    const finalPromptBase = form.querySelector('#sv_gen_prompt').value.trim();
-    const modelId = form.querySelector('#sv_gen_model').value;
+    // Сбор параметров.
+    const promptBase = form.querySelector('#sv_gen_prompt').value.trim();
+    const modelId = modelSelect.value;
     const styleId = form.querySelector('#sv_gen_style').value;
     if (!modelId) {
         toastr.error('Модель не выбрана.', 'Story Vision');
@@ -456,10 +487,11 @@ async function generateFlow() {
         toastr.warning(`Модель принимает максимум ${maxRefs} рефов — лишние отброшены.`, 'Story Vision');
     }
 
-    await runGeneration({ modelId, promptBase: finalPromptBase, styleId, usedRefs, targetMesId });
+    await runGeneration({ ...state, promptBase, modelId, styleId, usedRefs });
 }
 
-async function runGeneration({ modelId, promptBase, styleId, usedRefs, targetMesId }) {
+async function runGeneration(state) {
+    const { modelId, promptBase, styleId, usedRefs, targetMesId } = state;
     // Финальный промпт: сцена + маппинг рефов + стиль.
     let prompt = promptBase;
     if (usedRefs.length) {
@@ -496,8 +528,7 @@ async function runGeneration({ modelId, promptBase, styleId, usedRefs, targetMes
             }
         }
 
-        await showResultPopup({ url, prompt, model: modelId, attached, targetMesId },
-            { modelId, promptBase, styleId, usedRefs, targetMesId });
+        await showResultPopup({ url, prompt, model: modelId, attached, targetMesId }, state);
     } catch (error) {
         console.error('[StoryVision] Сбой генерации:', error);
         toastr.error(String(error?.message ?? error), 'Story Vision');
@@ -519,7 +550,10 @@ async function showResultPopup(entry, regenParams) {
                 : ''}</small>
         </div>
         <div class="sv-result-actions">
-            <div class="menu_button" id="sv_res_regen"><i class="fa-solid fa-rotate"></i> Ещё раз</div>
+            <div class="menu_button" id="sv_res_regen" title="Тот же промпт, модель и стиль — новый бросок">
+                <i class="fa-solid fa-rotate"></i> Ещё раз</div>
+            <div class="menu_button" id="sv_res_redo" title="Вернуться к выбору модели, стиля и промпта">
+                <i class="fa-solid fa-sliders"></i> Заново</div>
             ${entry.attached ? '' : `
                 <div class="menu_button" id="sv_res_attach">
                     <i class="fa-solid fa-paperclip"></i> Прикрепить</div>`}
@@ -532,6 +566,10 @@ async function showResultPopup(entry, regenParams) {
     let action = null;
     container.querySelector('#sv_res_regen').addEventListener('click', (e) => {
         action = 'regen';
+        e.target.closest('dialog')?.querySelector('.popup-button-ok')?.click();
+    });
+    container.querySelector('#sv_res_redo').addEventListener('click', (e) => {
+        action = 'redo';
         e.target.closest('dialog')?.querySelector('.popup-button-ok')?.click();
     });
     container.querySelector('#sv_res_attach')?.addEventListener('click', async (e) => {
@@ -557,6 +595,8 @@ async function showResultPopup(entry, regenParams) {
 
     if (action === 'regen' && regenParams) {
         await runGeneration(regenParams);
+    } else if (action === 'redo' && regenParams) {
+        await reviewAndGenerate(regenParams);
     } else if (action === 'gallery') {
         await openChatGallery();
     }
