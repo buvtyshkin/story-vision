@@ -6,7 +6,7 @@ import {
     resizeImageFile, uploadImage, setCast, removeFromCast,
     resolveMany, refToDataUrl,
 } from './refs.js';
-import { runPrompter, STYLE_PRESETS, getStyleById } from './prompter.js';
+import { runPrompter, STYLE_PRESETS, getStyleById, runRefPrompter } from './prompter.js';
 import { fetchImageModels, generateImage, getModelHints, fetchModelPricing } from './imagegen.js';
 import {
     persistGeneratedImage, attachToMessage, findLastMessageId,
@@ -63,6 +63,7 @@ export async function openLibrary() {
         <div class="sv-section">
             <div class="sv-section-title">
                 <i class="fa-solid fa-images"></i> Библиотека референсов
+                <div class="menu_button sv-gen-ref-btn"><i class="fa-solid fa-wand-magic-sparkles"></i> Сгенерировать</div>
                 <div class="menu_button sv-add-ref"><i class="fa-solid fa-plus"></i> Добавить</div>
             </div>
             <div class="sv-grid">
@@ -103,6 +104,11 @@ export async function openLibrary() {
         container.querySelector('.sv-add-ref')?.addEventListener('click', async () => {
             const created = await editRefDialog(null);
             if (created) render();
+        });
+
+        container.querySelector('.sv-gen-ref-btn')?.addEventListener('click', async () => {
+            await openRefGenerator();
+            render(); // библиотека могла пополниться
         });
 
         container.querySelectorAll('.sv-cast-item .sv-cast-remove').forEach(btn => {
@@ -655,4 +661,194 @@ export async function openChatGallery() {
         large: true,
         allowVerticalScrolling: true,
     });
+}
+
+// ============================================================
+// Генерация референсов
+// ============================================================
+
+export async function openRefGenerator(prefillName = '') {
+    try {
+        await refFlow(prefillName);
+    } catch (error) {
+        console.error('[StoryVision] Сбой генерации рефа:', error);
+        toastr.error(String(error?.message ?? error), 'Story Vision');
+    }
+}
+
+async function refFlow(prefillName) {
+    const { callGenericPopup, POPUP_TYPE } = popupApi();
+
+    const nameInput = await callGenericPopup(
+        'Для кого сгенерировать референс?<br><small>Имя персонажа, персоны или NPC из истории — как его зовут в тексте.</small>',
+        POPUP_TYPE.INPUT,
+        prefillName,
+    );
+    if (!nameInput || typeof nameInput !== 'string' || !nameInput.trim()) return;
+    const targetName = nameInput.trim();
+
+    const busyToast = toastr.info(`Собираю всё о «${targetName}» из контекста…`,
+        'Story Vision', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: true });
+    let parsed;
+    try {
+        parsed = await runRefPrompter(targetName);
+    } finally {
+        toastr.clear(busyToast);
+    }
+    console.debug('[StoryVision] Реф-промптер вернул:', parsed);
+
+    let models = [];
+    try {
+        models = await fetchImageModels();
+    } catch (error) {
+        toastr.warning(error.message, 'Story Vision');
+    }
+
+    const settings = getSettings();
+    const form = document.createElement('div');
+    form.classList.add('sv-generate');
+    form.innerHTML = `
+        <h4><i class="fa-solid fa-id-card"></i> Референс: ${esc(parsed.tag)}</h4>
+
+        <label>Промпт портрета (можно править)</label>
+        <textarea id="sv_ref_prompt" class="text_pole" rows="8">${esc(parsed.prompt)}</textarea>
+
+        <label>Сходство (опционально — «closely resembling …»)</label>
+        <input id="sv_ref_resemblance" class="text_pole" type="text"
+               placeholder="actress Eva Green circa 2006">
+
+        <div class="sv-gen-row">
+            <div>
+                <label>Модель</label>
+                <select id="sv_ref_model" class="text_pole">
+                    ${models.length === 0
+                        ? '<option value="">— discovery не удался —</option>'
+                        : models.map(m => `
+                            <option value="${esc(m.id)}" ${m.id === (settings.lastModel ?? '') ? 'selected' : ''}>
+                                ${esc(m.name)}${m.supportsRefs ? ` (refs: ${m.maxRefs})` : ' (без refs)'}
+                            </option>`).join('')}
+                </select>
+                <small id="sv_ref_model_info" class="sv-model-info"></small>
+            </div>
+            <div>
+                <label>Стиль</label>
+                <select id="sv_ref_style" class="text_pole">
+                    ${STYLE_PRESETS.map(s => `
+                        <option value="${esc(s.id)}" ${s.id === 'realism' ? 'selected' : ''}>
+                            ${esc(s.label)}
+                        </option>`).join('')}
+                </select>
+            </div>
+        </div>
+        <small class="sv-hint">Совет: стиль рефа лучше держать единым для всей библиотеки —
+        рисовальщик увереннее переносит личность между картинками одного стиля.</small>`;
+
+    const infoEl = form.querySelector('#sv_ref_model_info');
+    const modelSelect = form.querySelector('#sv_ref_model');
+    const updateModelInfo = async () => {
+        const model = models.find(m => m.id === modelSelect.value);
+        if (!model) { infoEl.textContent = ''; return; }
+        const hints = getModelHints(model);
+        infoEl.textContent = `Качество: ${hints.quality} · Цензура: ${hints.censorship} · Цена: ${hints.cost}`;
+        const requestedId = model.id;
+        const price = await fetchModelPricing(requestedId);
+        if (modelSelect.value === requestedId && price !== null) {
+            infoEl.textContent = `Качество: ${hints.quality} · Цензура: ${hints.censorship} · Цена: ~$${price.toFixed(3)}/изобр.`;
+        }
+    };
+    modelSelect.addEventListener('change', updateModelInfo);
+    updateModelInfo();
+
+    const confirmed = await callGenericPopup(form, POPUP_TYPE.CONFIRM, '', {
+        okButton: 'Генерировать',
+        cancelButton: 'Отмена',
+        wide: true,
+        allowVerticalScrolling: true,
+    });
+    if (!confirmed) return;
+
+    const promptBase = form.querySelector('#sv_ref_prompt').value.trim();
+    const resemblance = form.querySelector('#sv_ref_resemblance').value.trim();
+    const modelId = modelSelect.value;
+    const styleId = form.querySelector('#sv_ref_style').value;
+    if (!modelId) {
+        toastr.error('Модель не выбрана.', 'Story Vision');
+        return;
+    }
+
+    await runRefGeneration({ parsed, promptBase, resemblance, modelId, styleId });
+}
+
+async function runRefGeneration(state) {
+    const { parsed, promptBase, resemblance, modelId, styleId } = state;
+
+    let prompt = promptBase;
+    if (resemblance) {
+        prompt += `\n\nThe character is a person closely resembling ${resemblance} — keep that likeness.`;
+    }
+    const style = getStyleById(styleId);
+    if (style.suffix) prompt += `\n\nStyle: ${style.suffix}`;
+
+    const busyToast = toastr.info('Генерация референса…', 'Story Vision',
+        { timeOut: 0, extendedTimeOut: 0, tapToDismiss: true });
+    let url;
+    try {
+        const rawSrc = await generateImage({ model: modelId, prompt, refDataUrls: [] });
+        url = await persistGeneratedImage(rawSrc, `ref_${parsed.tag}`);
+    } catch (error) {
+        console.error('[StoryVision] Сбой генерации рефа:', error);
+        toastr.error(String(error?.message ?? error), 'Story Vision');
+        return;
+    } finally {
+        toastr.clear(busyToast);
+    }
+
+    await showRefResultPopup(url, state);
+}
+
+async function showRefResultPopup(url, state) {
+    const { callGenericPopup, POPUP_TYPE } = popupApi();
+    const { parsed, resemblance } = state;
+
+    const container = document.createElement('div');
+    container.classList.add('sv-result');
+    container.innerHTML = `
+        <img class="sv-result-img" src="${url}" alt="">
+        <div class="sv-result-actions">
+            <div class="menu_button" id="sv_ref_save"><i class="fa-solid fa-bookmark"></i> В библиотеку</div>
+            <div class="menu_button" id="sv_ref_regen"><i class="fa-solid fa-rotate"></i> Ещё раз</div>
+            <a class="menu_button" href="${url}" download="ref_${esc(parsed.tag)}.png">
+                <i class="fa-solid fa-download"></i> Скачать</a>
+        </div>`;
+
+    let action = null;
+    container.querySelector('#sv_ref_regen').addEventListener('click', (e) => {
+        action = 'regen';
+        e.target.closest('dialog')?.querySelector('.popup-button-ok')?.click();
+    });
+    container.querySelector('#sv_ref_save').addEventListener('click', async (e) => {
+        const chatData = getChatData();
+        addRef({
+            tag: parsed.tag,
+            aliases: parsed.aliases,
+            arc: chatData.arc ?? '',
+            note: parsed.note,
+            resemblance: resemblance,
+            path: url,
+            priority: 1,
+        });
+        toastr.success(`Референс «${parsed.tag}» добавлен в библиотеку.`, 'Story Vision');
+        e.target.closest('.menu_button').style.display = 'none';
+    });
+
+    await callGenericPopup(container, POPUP_TYPE.TEXT, '', {
+        okButton: 'Закрыть',
+        wide: true,
+        large: true,
+        allowVerticalScrolling: true,
+    });
+
+    if (action === 'regen') {
+        await runRefGeneration(state);
+    }
 }

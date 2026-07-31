@@ -222,3 +222,112 @@ export function getStyleById(id) {
     }
     return style;
 }
+
+// ============================================================
+// Генерация референсов: вытаскиваем всё о персонаже из контекста
+// ============================================================
+
+function collectRefContext() {
+    const ctx = getCtx();
+    const settings = getSettings();
+    const parts = [];
+
+    const char = ctx.characters?.[ctx.characterId];
+    if (char?.description || char?.personality) {
+        parts.push(`<character_card name="${char.name ?? ''}">\n${char.description ?? ''}\n${char.personality ?? ''}\n</character_card>`);
+    }
+    const personaDesc = ctx.powerUserSettings?.persona_description;
+    if (personaDesc) {
+        parts.push(`<user_persona name="${ctx.name1 ?? ''}">\n${personaDesc}\n</user_persona>`);
+    }
+
+    const messages = (ctx.chat ?? []).filter(m => !m.is_system && m.mes);
+    // Для рефов контекст глубже: детали внешности размазаны по истории.
+    const slice = settings.fullContext
+        ? messages
+        : messages.slice(-Math.max(settings.contextDepth, 30));
+    if (slice.length) {
+        parts.push(`<chat_excerpt>\n${slice.map(m => `${m.name}: ${m.mes}`).join('\n\n')}\n</chat_excerpt>`);
+    }
+    return parts.join('\n\n');
+}
+
+function buildRefInstruction(targetName, arc) {
+    return [
+        `You are a character designer. From the materials below (character card, user persona, chat excerpt), gather EVERY established physical detail about the character "${targetName}": apparent age, height and build, face structure, eyes, hair (color, length, texture, how they wear it), skin tone, scars, tattoos, distinctive marks, posture and bearing, typical clothing and accessories, and the era/setting they belong to.`,
+        '',
+        'Respond with ONLY a JSON object, no markdown fences, no commentary:',
+        '{',
+        '  "prompt": "detailed English image prompt for a character reference portrait, 120-200 words",',
+        `  "tag": "short canonical tag for this character",`,
+        '  "aliases": ["other names they are called in the story"],',
+        '  "note": "very short note for the library card"',
+        '}',
+        '',
+        'The "prompt" must describe a CHARACTER REFERENCE PORTRAIT, ideal for later use as an identity reference:',
+        '- Three-quarter view, upper body (waist-up), relaxed neutral stance, gaze slightly off-camera, natural resting expression true to their personality.',
+        '- Plain neutral background (soft grey or muted tone), soft even studio-like lighting, sharp facial detail, no dramatic shadows, no props stealing attention.',
+        '- Physical details must be faithful to the source materials. Where a detail is not established, choose something reasonable and consistent with the era and the story — do not leave gaps.',
+        '- Dress them in their most typical/canonical outfit.',
+        '- Do NOT include style keywords (style is appended separately). Do NOT use real celebrity names.',
+        arc ? `\nCurrent story arc: ${arc}.` : '',
+    ].join('\n');
+}
+
+export async function runRefPrompter(targetName) {
+    const ctx = getCtx();
+    const settings = getSettings();
+
+    if (!settings.prompterProfile) {
+        throw new Error('Профиль промптера не выбран — задай его в настройках Story Vision.');
+    }
+    const service = ctx.ConnectionManagerRequestService;
+    if (!service) {
+        throw new Error('ConnectionManagerRequestService недоступен — обнови SillyTavern.');
+    }
+
+    const context = collectRefContext();
+    if (!context.trim()) {
+        throw new Error('Не из чего собирать: нет ни карточки, ни истории чата.');
+    }
+
+    const messages = [
+        { role: 'system', content: buildRefInstruction(targetName, getChatData().arc) },
+        { role: 'user', content: `${context}\n\nProduce the JSON now.` },
+    ];
+
+    const result = await service.sendRequest(
+        settings.prompterProfile,
+        messages,
+        PROMPTER_MAX_TOKENS,
+        { includePreset: false, includeInstruct: false },
+    );
+
+    const text = typeof result === 'string' ? result : (result?.content ?? '');
+    return parseRefPrompterResponse(text, targetName);
+}
+
+function parseRefPrompterResponse(text, targetName) {
+    // Переиспользуем общий разбор JSON, но со своей схемой.
+    if (!text || !text.trim()) throw new Error('Промптер вернул пустой ответ.');
+    let clean = text.replace(/```json|```/gi, '').trim();
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start === -1 || end === -1 || end <= start) {
+        throw new Error('В ответе промптера не найден JSON. Начало: ' + clean.slice(0, 120));
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(clean.slice(start, end + 1));
+    } catch {
+        throw new Error('JSON промптера не парсится. Начало: ' + clean.slice(0, 120));
+    }
+    const prompt = String(parsed.prompt ?? '').trim();
+    if (!prompt) throw new Error('Промптер не вернул поле "prompt".');
+    return {
+        prompt,
+        tag: String(parsed.tag ?? targetName).trim() || targetName,
+        aliases: Array.isArray(parsed.aliases) ? parsed.aliases.map(a => String(a).trim()).filter(Boolean) : [],
+        note: String(parsed.note ?? '').trim(),
+    };
+}
